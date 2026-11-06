@@ -22,7 +22,8 @@ MODES (main menu)
                        all other copies. Files that are duplicated only inside
                        one folder are ignored.
   3  Selection window  Opens the selection window again for the last scan,
-                       with all ticks made so far. Shown after a scan.
+                       with all ticks made so far. Shown while a scan result
+                       with copies left is kept.
   The chosen folders must not lie inside each other.
 
 WORKFLOW
@@ -30,22 +31,23 @@ WORKFLOW
   2  Scan       the console shows the progress and then the largest groups
   3  Window     check the files with the preview, all copies except the
                 oldest are ticked already, change the ticks where needed
-  4  Console    check the deletion plan, choose the deletion method and
-                confirm
+  4  Console    choose the deletion method and what happens with empty
+                folders, check the deletion plan and confirm
   Afterwards the window can open again right away for the files that are
   left, or later with 3 in the main menu. The ticks are kept until the next
   scan, also after a simulation.
   Identical files are numbered and named by the start of their digest, for
-  example "#12  3f8526d49df1e855", the same in the window, the console and
-  the report.
+  example "#12  3f8526d49df1e855", in the window and the console. The report
+  shows the full digest after the number.
 
 HOW FILES ARE COMPARED
   Only the content counts. Names, extensions and dates do not matter.
     Step 1  Walk      all files are listed with their size
     Step 2  Check     files that share their size with another file are
                       checked for hard links and their dates are read
-    Step 3  Start     the first 64 KB of these files are hashed
-    Step 4  Content   files that still match are hashed completely
+    Step 3  Start     the first 64 KB of these files are hashed, which is the
+                      whole file for files up to 64 KB
+    Step 4  Content   larger files that still match are hashed completely
   Files with a unique size or a different start are sorted out early, without
   reading them completely, which saves most of the reading time. The hash
   function is SHA512, a cryptographic hash. Two different files with the same
@@ -68,9 +70,9 @@ SELECTION WINDOW (dark mode)
     counts, the column "Date" shows it. Windows keeps the modification date
     when it copies a file, but sets the creation date to the time of copying,
     so the older of both dates usually belongs to the original.
-  * Click a checkbox or press Space to switch the selected rows. The checkbox
-    of a row with a digest ticks or unticks all its copies. Ticking every copy
-    is possible, then no copy remains.
+  * Click a checkbox to switch its row, or press Space to switch all selected
+    rows. The checkbox of a row with a digest ticks or unticks all its copies.
+    Ticking every copy is possible, then no copy remains.
   * "Select all" ticks and "Unselect all" unticks every file shown, so with
     the file type filter for example all JPG files.
   * Folder priority: folders with drive letter, the top entry is kept first.
@@ -79,11 +81,12 @@ SELECTION WINDOW (dark mode)
     "Apply folder priority" ticks all files shown anew: the copy in the
     folder with the best priority stays unticked, among equal priority the
     oldest copy, all other copies are ticked.
-  * Preview: the right side shows the selected file. Videos and audio files
-    can be played, PDF files up to 100 MB scrolled and text files read.
-    Other files and larger PDF files show the preview image of Windows, for
-    example Office documents. "Show in Explorer" opens the folder of the
-    file, right click offers more.
+  * Preview: the right side shows the selected file. Images are shown fitted
+    into the pane, videos and audio files can be played, PDF files up to
+    100 MB scrolled and the first 64 KB of text files read. Other files and
+    larger PDF files show the preview image of Windows, for example Office
+    documents. "Show in Explorer" opens the folder of the file, right click
+    on a file offers more.
   * "Continue with the ticked files" hands the ticks to the console, closing
     the window cancels. The ticks are kept when the window opens again.
 
@@ -92,11 +95,13 @@ OPTIONS ASKED FOR EVERY RUN
     folder with the Windows "System" attribute plus well known system items
     such as $RECYCLE.BIN, System Volume Information, pagefile.sys, desktop.ini
     or Thumbs.db. Excluded system folders are not entered at all.
-  * Reports: save the list of all duplicates and a log of every deleted file
-    as text files in the folder "reports" next to this script.
-  * Deletion method: recycle bin (default), permanent, or a simulation that
-    only shows what would be deleted. After a simulation the selection window
-    can be opened again with the same scan result, without scanning again.
+  * Reports: save the list of all duplicates and a log of the deletion with
+    every deleted, skipped or failed item as text files in the folder
+    "reports" next to this script.
+  * Deletion method: recycle bin (default where available), permanent, or a
+    simulation that only shows what would be deleted. After a simulation the
+    selection window can be opened again with the same scan result, without
+    scanning again.
   * Empty folders after deleting: keep all folders, remove only the folders
     that became empty through the deletion, or remove all empty folders, also
     those that were empty before (default). Empty folders go the same way as
@@ -117,6 +122,12 @@ STATUS OUTPUT
 SAFETY
   * Only the chosen folders and their subfolders are read. Links, junctions
     and other reparse points are never followed or deleted.
+  * The program never deletes itself. Windows does not stop a running script
+    from deleting its own file, so the program compares paths: the script is
+    skipped by the scan and the deletion, and a folder holding it is never
+    removed. Only the script itself is protected: other files next to it, for
+    example other scripts or older reports in the folder "reports", are
+    treated like all other files when they lie in a chosen folder.
   * The recycle bin and System Volume Information currently used by Windows
     are never entered. Windows, Program Files and ProgramData with all their
     subfolders, your user profile itself and every folder containing one of
@@ -223,7 +234,7 @@ except ImportError as pyside_import_error:
 HASH_ALGORITHM = "sha512"               # hashlib name, sha512 is fast on 64 bit and checkable with Get-FileHash
 PARTIAL_HASH_BYTES = 64 * 1024          # start of a file that is hashed in step 3
 HASH_CHUNK_BYTES = 1024 * 1024          # bytes read at once while hashing or comparing
-VERIFY_CONTENT_BEFORE_DELETION = False  # also compare byte by byte with the kept copy, reads both files again
+VERIFY_CONTENT_BEFORE_DELETION = True   # also compare byte by byte with the kept copy, reads both files again
 STATUS_INTERVAL_SECONDS = 60            # status line with the current folder or file
 LIVE_COUNTER_INTERVAL_SECONDS = 0.5     # refresh rate of the live counter line
 RECYCLE_BIN_BATCH_SIZE = 100            # files per recycle bin call, more is faster
@@ -249,6 +260,9 @@ MEDIA_DEFAULT_VOLUME = 0.7              # volume of videos and audio files, from
 
 PROGRAM_TITLE = "DUPLICATE FINDER"
 PROGRAM_SUBTITLE = "Finds identical files inside or between folders and deletes the copies you choose"
+# Location of this script with links resolved. Windows lets a running script delete its own file,
+# so every path the program deletes is compared with it.
+SCRIPT_PATH = os.path.realpath(__file__)
 LINE_WIDTH = 80
 HASH_NAME = HASH_ALGORITHM.upper()      # SHA512 is also the name Get-FileHash uses
 TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -654,6 +668,7 @@ class WalkStatistics:
     skipped_system_folders: PathCollection = field(default_factory=PathCollection)
     skipped_links: PathCollection = field(default_factory=PathCollection)
     unreadable_items: PathCollection = field(default_factory=PathCollection)
+    skipped_own_script: PathCollection = field(default_factory=PathCollection)
 
 
 @dataclass
@@ -1013,6 +1028,10 @@ class FolderWalker:
                 subfolders.append(entry.path)
             return
 
+        # This script is never compared or deleted, also when it lies in a chosen folder
+        if leads_to_own_script(entry.path):
+            self.statistics.skipped_own_script.add(to_display_path(entry.path))
+            return
         if not self.include_system_items and is_operating_system_item(entry.name, attributes, is_folder=False):
             self.statistics.skipped_system_files.add(to_display_path(entry.path), size_bytes=entry_stat.st_size)
             return
@@ -2882,7 +2901,10 @@ class DuplicateDeleter:
         outcomes: Dict[str, Optional[str]] = {}
         deletable_paths: List[str] = []
         for file_path in file_paths:
-            if has_unsafe_characters(os.path.basename(file_path)):
+            # The folder walk skips this script already, this check is the last line of defence
+            if leads_to_own_script(file_path):
+                outcomes[file_path] = "this script itself, it is never deleted"
+            elif has_unsafe_characters(os.path.basename(file_path)):
                 outcomes[file_path] = "file name contains characters Windows cannot handle"
             else:
                 deletable_paths.append(file_path)
@@ -2939,6 +2961,9 @@ class DuplicateDeleter:
 
     def _remove_folder(self, folder_path: str, volume: TargetVolume) -> Optional[str]:
         """Remove an empty folder with the method chosen for the files. Return an error message, None on success."""
+        # The folder of this script is never empty, this check is the last line of defence
+        if leads_to_own_script(folder_path):
+            return "holds this script, it is never removed"
         if self._is_simulation:
             return None
         # Permanent deletion, the recycle bin object exists only for its own method
@@ -3137,6 +3162,7 @@ class ReportBuilder:
             ("Skipped system folders", statistics.skipped_system_folders, False),
             ("Skipped links and junctions", statistics.skipped_links, False),
             ("Unreadable folders or files", statistics.unreadable_items, False),
+            ("Protected, this script", statistics.skipped_own_script, False),
         ]
         for title, collection, show_size in sections:
             lines += ReportBuilder._collection_lines(title, collection, example_limit, show_size)
@@ -3702,6 +3728,17 @@ def resolve_target_folder(raw_input: str) -> Tuple[Optional[str], str]:
     if violation:
         return None, f"This folder is not allowed because {violation}."
     return resolved_path, ""
+
+
+def leads_to_own_script(path: str) -> bool:
+    """True if the path is this script or a folder holding it, upper and lower case do not matter.
+
+    Windows lets a running script delete its own file, so the paths are compared. Both are
+    compared without the long path prefix, the chosen folders and this script have their links resolved.
+    """
+    script_key = os.path.normcase(to_display_path(SCRIPT_PATH))
+    path_key = os.path.normcase(to_display_path(path)).rstrip("\\")
+    return script_key == path_key or script_key.startswith(path_key + "\\")
 
 
 def find_folder_overlap(folder: str, other_folders: List[str]) -> str:
