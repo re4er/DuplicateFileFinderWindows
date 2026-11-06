@@ -2,7 +2,7 @@
 Duplicate file finder for Windows. Compares file content with SHA-512, shows every copy with a preview in a dark PySide6 window and deletes the copies you choose to the recycle bin, permanently or as a simulation.
 
 <br>
-Duplicate Finder is a single-file Python tool for Windows that finds files with
+The program is a single-file Python tool for Windows that finds files with
 identical content inside one or more folders, or between them, no matter how the
 files are named. It compares files in four steps: size, hard link check, SHA-512
 of the first 64 KB and SHA-512 of the full content. Most files are sorted out
