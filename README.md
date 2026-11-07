@@ -18,4 +18,4 @@ simulation only shows what would happen. Links and Windows folders are never
 touched, and the program never deletes itself. Reports can be saved as text
 files.
 
-Requirements: Windows 10 or 11, Python 3.9 or newer, PySide6 6.5 or newer.
+**Requirements:** Windows 10 or 11, Python 3.9 or newer, PySide6 6.5 or newer.
