@@ -23,7 +23,8 @@ MODES (main menu)
                        one folder are ignored.
   3  Selection window  Opens the selection window again for the last scan,
                        with all ticks made so far. Shown while a scan result
-                       with copies left is kept.
+                       with copies left is kept. A new scan replaces it as
+                       soon as it starts, also when it is cancelled.
   The chosen folders must not lie inside each other.
 
 WORKFLOW
@@ -97,7 +98,8 @@ OPTIONS ASKED FOR EVERY RUN
     or Thumbs.db. Excluded system folders are not entered at all.
   * Reports: save the list of all duplicates and a log of the deletion with
     every deleted, skipped or failed item as text files in the folder
-    "reports" next to this script.
+    "reports" next to this script. If the log cannot be written, for example
+    because the drive is full, the deletion goes on and the console says so.
   * Deletion method: recycle bin (default where available), permanent, or a
     simulation that only shows what would be deleted. After a simulation the
     selection window can be opened again with the same scan result, without
@@ -149,6 +151,9 @@ SAFETY
     Paths longer than 259 characters and special names such as nul.txt or a
     name ending with a dot cannot be recycled at all. Such files are listed as
     failed and can be deleted with the permanent method.
+  * Only the marked items go to the recycle bin. On its own Windows would also
+    move the folder of a saved web page, for example "Page-Dateien" or
+    "Page_files", together with "Page.htm", and the other way round.
 
 REQUIREMENTS
   * Windows 10 or 11
@@ -318,9 +323,12 @@ FOF_SILENT = 0x0004                     # no progress dialog
 FOF_NOCONFIRMATION = 0x0010             # no "are you sure" questions
 FOF_ALLOWUNDO = 0x0040                  # use the recycle bin
 FOF_NOERRORUI = 0x0400                  # no error dialogs
+# Only the given paths. Without it Windows also recycles the folder of a saved web page with its file,
+# for example "Page-Dateien" or "Page_files" with "Page.htm", and the file with an empty such folder.
+FOF_NO_CONNECTED_ELEMENTS = 0x2000
 FOF_WANTNUKEWARNING = 0x4000            # ask before a file is deleted permanently instead of recycled
 RECYCLE_BIN_FLAGS = (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT
-                     | FOF_NOERRORUI | FOF_WANTNUKEWARNING)
+                     | FOF_NOERRORUI | FOF_NO_CONNECTED_ELEMENTS | FOF_WANTNUKEWARNING)
 SHELL_MAX_PATH_LENGTH = 259             # MAX_PATH without the terminating null character
 VOLUME_PATH_BUFFER_LENGTH = 32768
 DRIVE_FIXED = 3                         # GetDriveTypeW: internal or external hard disk
@@ -1918,7 +1926,7 @@ class PreviewWidget(QtWidgets.QWidget):
 
     def _show_in_explorer(self) -> None:
         if self._current_file is not None:
-            show_error_message(self, show_in_explorer(self._current_file.display_path))
+            show_error_message(self, show_in_explorer(self._current_file))
 
 
 # ==== Selection window ========================================================
@@ -2678,7 +2686,7 @@ class SelectionWindow(QtWidgets.QMainWindow):
         folder = os.path.dirname(duplicate_file.display_path)
         menu = QtWidgets.QMenu(self)
         menu.addAction("Show in Explorer",
-                       lambda: show_error_message(self, show_in_explorer(duplicate_file.display_path)))
+                       lambda: show_error_message(self, show_in_explorer(duplicate_file)))
         menu.addAction("Copy full path",
                        lambda: QtWidgets.QApplication.clipboard().setText(duplicate_file.display_path))
         menu.addSeparator()
@@ -3232,10 +3240,15 @@ class ReportWriter:
 
 
 class DeletionLog:
-    """Log file with one line for every deleted, skipped, failed or removed item."""
+    """Log file with one line for every deleted, skipped, failed or removed item.
+
+    A write error, for example on a full drive, does not stop the deletion. The log ends
+    at that point and write_error tells why.
+    """
 
     def __init__(self, file_path: str, header_lines: List[str]) -> None:
         self.file_path = file_path
+        self.write_error: Optional[str] = None
         self._log_file = open(file_path, "w", encoding="utf-8", errors="replace")
         self.write_lines(header_lines + [""])
 
@@ -3243,16 +3256,29 @@ class DeletionLog:
         return self
 
     def __exit__(self, *exception_info) -> None:
-        self._log_file.close()
+        try:
+            # Closing writes the rest of the buffer, so it can fail as well
+            self._log_file.close()
+        except OSError as error:
+            self.write_error = self.write_error or describe_os_error(error)
 
     def write_entry(self, status: str, path: str, note: str = "") -> None:
         line = f"{status:<14}{path}"
         if note:
             line += f"   [{note}]"
-        self._log_file.write(line + "\n")
+        self._write(line + "\n")
 
     def write_lines(self, lines: List[str]) -> None:
-        self._log_file.write("\n".join(lines) + "\n")
+        self._write("\n".join(lines) + "\n")
+
+    def _write(self, text: str) -> None:
+        """Write unless an earlier write failed, a failed write is remembered instead of raised."""
+        if self.write_error is not None:
+            return
+        try:
+            self._log_file.write(text)
+        except OSError as error:
+            self.write_error = describe_os_error(error)
 
 
 # ==== Console dialog ==========================================================
@@ -3269,8 +3295,9 @@ class ConsoleDialog:
             ("2", "Between folders   files that exist in at least two of the folders"),
         ]
         if last_scan is not None:
-            options.append(("3", f"Selection window  open it again for the last scan, "
-                                 f"{format_count(len(last_scan.groups))} with copies left"))
+            file_count = len(last_scan.groups)
+            options.append(("3", f"Selection window  open the last scan again, {format_quantity(file_count, 'file')} "
+                                 f"still {'has' if file_count == 1 else 'have'} copies"))
         options.append(("0", "Exit"))
         choice = self._choose(options, default_key=None,
                               footer="Ctrl+C cancels a running step and returns to this menu.")
@@ -3456,7 +3483,7 @@ class DuplicateFinderApp:
         self._dialog = ConsoleDialog()
         self._report_writer = ReportWriter()
         self._last_folders = start_folders
-        # The last scan stays available for entry 3 of the main menu until the next scan
+        # The last scan stays available for entry 3 of the main menu until the next scan starts
         self._last_scan: Optional[ScanResult] = None
         self._last_selection = SelectionState()
         self._last_scan_saves_reports = False
@@ -3502,13 +3529,14 @@ class DuplicateFinderApp:
         include_system_files = self._dialog.ask_include_system_files()
         save_reports = self._dialog.ask_save_reports(self._report_writer.folder)
 
+        # A new scan replaces the last one as soon as it starts, also when it is cancelled
+        self._last_scan = None
         scan_result = self._run_scan(mode, folders, include_system_files, save_reports)
         if scan_result.was_cancelled:
             print("\nThe scan was cancelled, its result is incomplete and cannot be used for deleting.")
             return
         if not scan_result.groups:
             print("\nNo duplicates found, nothing to delete.")
-            self._last_scan = None
             return
         self._last_scan = scan_result
         self._last_selection = SelectionState()
@@ -3611,7 +3639,11 @@ class DuplicateFinderApp:
             return None
         with deletion_log:
             result = self._execute_deletion(plan, deletion_log)
-        print(f"\nDeletion log saved: {deletion_log.file_path}")
+        if deletion_log.write_error is None:
+            print(f"\nDeletion log saved: {deletion_log.file_path}")
+        else:
+            print(f"\nThe deletion log is incomplete, writing it failed: {deletion_log.write_error}")
+            print(f"  {deletion_log.file_path}")
         return result
 
     def _execute_deletion(self, plan: DeletionPlan, deletion_log: Optional[DeletionLog]) -> DeletionResult:
@@ -3921,13 +3953,20 @@ def get_file_extension(path: str) -> str:
     return "" if extension == "." else extension
 
 
-def show_in_explorer(display_path: str) -> str:
+def show_in_explorer(duplicate_file: DuplicateFile) -> str:
     """Open the Explorer with the file selected. Return an error message, empty on success."""
-    if not os.path.lexists(to_extended_path(display_path)):
+    # The long path also finds names such as nul.txt, which a plain path would turn into a device
+    display_path = duplicate_file.display_path
+    if not os.path.lexists(duplicate_file.path):
         return f"The file no longer exists:\n{display_path}"
+    # The Explorer cannot select a special name such as nul.txt or a name ending with a dot, it opens the folder
+    if is_path_usable_by_shell(os.path.basename(display_path)):
+        command = f'explorer /select,"{display_path}"'
+    else:
+        command = f'explorer "{os.path.dirname(display_path)}"'
     try:
         # Explorer needs exactly this form, a list of arguments would be quoted differently
-        subprocess.Popen(f'explorer /select,"{display_path}"')
+        subprocess.Popen(command)
     except OSError as error:
         return f"Explorer could not be started: {describe_os_error(error)}"
     return ""
@@ -4042,7 +4081,7 @@ def format_folder_list(folders: List[str]) -> List[str]:
 
 
 def format_group_label(group: DuplicateGroup) -> str:
-    """Number and start of the digest of identical files, the same in the window, the console and the report."""
+    """Number and start of the digest of identical files, as the window and the console show them."""
     return f"#{group.number}  {group.digest[:SHORT_DIGEST_LENGTH]}"
 
 
